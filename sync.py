@@ -171,54 +171,76 @@ def sync_posts(local_files: list[str], strong: bool = False) -> None:
         title = post["title"]
         content = post["description"].encode(config["encoding"])
         hash = hashlib.md5(content).hexdigest()
+        postid = post["postid"]
 
         # post["categories"] is array of string
-        remote_info[title] = (hash, post["postid"], "[Markdown]" in post["categories"])
-    logging.info(f"post_number={len(remote_info)}")
+        remote_info[title] = (hash, postid, "[Markdown]" in post["categories"])
 
-    # 本地的所有文件
-    cur = 0
-    total = len(local_files)
+    # 和本地比较，获取是新帖子还是需要更新的帖子
+    new_articles = []
+    modified_articles = []
+    skip_posts_nr = 0
     for file in local_files:
-        cur += 1
         article = parse_local_artical(file, config["encoding"])
         title = article["title"]
         remote = remote_info.get(title)  # no exception
 
-        logging.info(
-            f"local file: {file}, title = {title}, tags={article['tags']}, local_hash={article['hash']}, "
-            f"remote_hash={remote[0] if remote else 'null'}"
-        )
-
-        if title not in remote_info:
-            id = blog.newPost(article)
-            if id:
-                logging.info(f"[{cur}/{total}] +++ post success: {title}\n")
-            else:
-                logging.error(f"[{cur}/{total}] +++ post failed: {title}\n")
-            time.sleep(65)
+        if remote is None:
+            new_articles.append(article)
             continue
 
-        post = remote_info[title]
-        hash, id, is_md = post[0], post[1], post[2]
+        hash, postid, is_md = remote[0], remote[1], remote[2]
         if article["hash"] == hash:
-            logging.info(f"[{cur}/{total}] === skip success: {title}\n")
+            skip_posts_nr += 1
         else:
-            status = blog.editPost(id, article)
-            if status:
-                logging.info(f"[{cur}/{total}] *** update success: {title}\n")
-            else:
-                logging.error(f"[{cur}/{total}] *** update failed: {title}\n")
+            modified_articles.append((article, postid))
+        remote_info.pop(title)
+
+    logging.info(
+        f"total_articles={len(local_files)}, skip={skip_posts_nr}, new={len(new_articles)}, modified={len(modified_articles)}, waited_to_delete={len(remote_info)}\n"
+    )
+
+    # 发布帖子
+    cur = 0
+    total = len(new_articles)
+    for article in new_articles:
+        cur += 1
+        title = article["title"]
+
+        id = blog.newPost(article)
+        if id:
+            logging.info(f"[{cur}/{total}] +++ post success: {title}\n")
+        else:
+            logging.error(f"[{cur}/{total}] +++ post failed: {title}\n")
+        if cur < total:
             time.sleep(65)
 
-        remote_info.pop(title)
+    # 修改帖子
+    cur = 0
+    total = len(modified_articles)
+    for article, postid in modified_articles:
+        cur += 1
+        title = article["title"]
+
+        status = blog.editPost(postid, article)
+        if status:
+            logging.info(f"[{cur}/{total}] *** update success: {title}\n")
+        else:
+            logging.error(f"[{cur}/{total}] *** update failed: {title}\n")
+        if cur < total:
+            time.sleep(65)
 
     # 删除网站上存在，但是本地不存在的帖子
     if strong:
+        cur = 0
+        total = len(remote_info)
         for title in remote_info:
+            cur += 1
             postid = remote_info[title][1]
             delete_post(postid)
-            time.sleep(65)
+
+            if cur < total:
+                time.sleep(65)
 
 
 def main():
